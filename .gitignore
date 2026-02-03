@@ -1,0 +1,29 @@
+# Node modules
+node_modules/
+
+# Build artifacts
+dist/
+build/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.log
+*.tmp
+/tmp/
+
+# SVG source files (we only need PNGs for the extension)
+icons/*.svg
+
+# Test and demo files
+test-page.html
+demo.html
