@@ -1,63 +1,46 @@
-// Load saved API key on popup open
+// No API key needed for local server
 document.addEventListener('DOMContentLoaded', async () => {
-  const result = await chrome.storage.local.get(['geminiApiKey']);
-  if (result.geminiApiKey) {
-    document.getElementById('apiKey').value = result.geminiApiKey;
-  }
+  // Check if local server is running
+  checkServerStatus();
 });
 
-// Configure button handler
-document.getElementById('configBtn').addEventListener('click', () => {
-  const apiKeySection = document.getElementById('apiKeySection');
-  apiKeySection.classList.toggle('visible');
-});
-
-// Save API key
-document.getElementById('saveKeyBtn').addEventListener('click', async () => {
-  const apiKey = document.getElementById('apiKey').value.trim();
-  if (!apiKey) {
-    showError('Please enter an API key');
-    return;
+// Check if the local Python server is accessible
+async function checkServerStatus() {
+  try {
+    const response = await fetch('http://127.0.0.1:8000/summarize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'test' })
+    });
+    
+    if (!response.ok) {
+      showError('Local server is not responding. Please start the Python server.');
+    }
+  } catch (error) {
+    showError('Cannot connect to local server. Make sure it\'s running on http://127.0.0.1:8000');
   }
-  
-  await chrome.storage.local.set({ geminiApiKey: apiKey });
-  showResponse('API key saved successfully!');
-  
-  // Hide the config section after saving
-  setTimeout(() => {
-    document.getElementById('apiKeySection').classList.remove('visible');
-  }, 1000);
-});
+}
 
 // Ask Gemini button handler
 document.getElementById('askBtn').addEventListener('click', async () => {
-  const question = document.getElementById('question').value.trim();
-  
-  if (!question) {
-    showError('Please enter a question');
-    return;
-  }
-  
-  await processQuery(question, 'askBtn');
+  await processQuery('ask', 'askBtn');
 });
 
 // Summarize button handler
 document.getElementById('summarizeBtn').addEventListener('click', async () => {
-  await processQuery('Please provide a comprehensive summary of this webpage, including the main topic, key points, and any important details.', 'summarizeBtn');
+  await processQuery('summarize', 'summarizeBtn');
 });
 
 // Common function to process queries
-async function processQuery(question, buttonId) {
-  // Get API key from storage
-  const result = await chrome.storage.local.get(['geminiApiKey']);
-  const apiKey = result.geminiApiKey;
+async function processQuery(queryType, buttonId) {
+  const question = queryType === 'ask' ? document.getElementById('question').value.trim() : null;
   
-  if (!apiKey) {
-    showError('Please configure your Gemini API key first');
+  if (queryType === 'ask' && !question) {
+    showError('Please enter a question');
     return;
   }
   
-  // Disable button and show loading
+  // Disable buttons and show loading
   const btn = document.getElementById(buttonId);
   const askBtn = document.getElementById('askBtn');
   const summarizeBtn = document.getElementById('summarizeBtn');
@@ -83,8 +66,17 @@ async function processQuery(question, buttonId) {
       throw new Error('Could not extract page content');
     }
     
-    // Send to Gemini API
-    const response = await queryGemini(apiKey, question, pageContent);
+    // Send to local Python server
+    let response;
+    if (queryType === 'summarize') {
+      response = await queryLocalServer('/summarize', { text: pageContent.text });
+    } else {
+      response = await queryLocalServer('/answer', { 
+        text: pageContent.text,
+        question: question
+      });
+    }
+    
     showResponse(response);
     
   } catch (error) {
@@ -122,56 +114,29 @@ function extractPageContent() {
   };
 }
 
-// Query Gemini API
-async function queryGemini(apiKey, question, pageContent) {
-  const apiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent`;
-  
-  // Sanitize title and URL to prevent prompt injection
-  const sanitizedTitle = (pageContent.title || 'Untitled').substring(0, 200);
-  const sanitizedUrl = (pageContent.url || 'Unknown URL').substring(0, 500);
-  
-  const prompt = `You are analyzing a webpage. Here are the details:
-
-Title: ${sanitizedTitle}
-URL: ${sanitizedUrl}
-${pageContent.truncated ? '(Content truncated to fit limits)' : ''}
-
-Page Content:
-${pageContent.text}
-
-User Question: ${question}
-
-Please provide a helpful and accurate answer based on the webpage content above.`;
-  
-  const requestBody = {
-    contents: [{
-      parts: [{
-        text: prompt
-      }]
-    }]
-  };
+// Query Local Python Server
+async function queryLocalServer(endpoint, data) {
+  const apiUrl = `http://127.0.0.1:8000${endpoint}`;
   
   const response = await fetch(apiUrl, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey
+      'Content-Type': 'application/json'
     },
-    body: JSON.stringify(requestBody)
+    body: JSON.stringify(data)
   });
   
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error?.message || `API request failed: ${response.status}`);
+    throw new Error(`Server request failed: ${response.status}. Make sure the Python server is running.`);
   }
   
-  const data = await response.json();
+  const result = await response.json();
   
-  if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
-    throw new Error('Unexpected API response format');
+  if (result.error) {
+    throw new Error(result.error);
   }
   
-  return data.candidates[0].content.parts[0].text;
+  return result.summary || result.answer || 'No response from server';
 }
 
 // Convert markdown to HTML

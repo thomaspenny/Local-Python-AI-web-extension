@@ -1,12 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Gemini Webpage Analyzer",
-  "version": "1.0.0",
-  "description": "Ask Gemini questions about any webpage by analyzing its content",
+  "name": "Local AI Webpage Analyzer",
+  "version": "2.0.0",
+  "description": "Analyze and summarize webpages using a local Python AI server",
   "permissions": [
     "activeTab",
-    "scripting",
-    "storage"
+    "scripting"
   ],
   "action": {
     "default_popup": "popup.html",
