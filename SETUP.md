@@ -19,10 +19,10 @@ First, make sure you have Python 3.8+ installed. Then install the required packa
 pip install -r requirements.txt
 ```
 
-After installing, you'll also need to download the NLTK punkt tokenizer data:
+After installing, you'll also need to download the NLTK punkt_tab tokenizer data:
 
 ```bash
-python -c "import nltk; nltk.download('punkt')"
+python -c "import nltk; nltk.download('punkt_tab')"
 ```
 
 ### 2. Start the Python Server
@@ -125,7 +125,7 @@ Make sure all dependencies are installed:
 
 ```bash
 pip install -r requirements.txt
-python -c "import nltk; nltk.download('punkt')"
+python -c "import nltk; nltk.download('punkt_tab')"
 ```
 
 ### CORS Errors

@@ -94,13 +94,66 @@ function extractPageContent() {
   const title = document.title;
   const url = window.location.href;
   
-  // Remove script and style elements
+  // Remove script, style, and other non-content elements
   const clone = document.body.cloneNode(true);
-  const scripts = clone.querySelectorAll('script, style, noscript');
-  scripts.forEach(el => el.remove());
+  const elementsToRemove = clone.querySelectorAll(
+    'script, style, noscript, nav, header, footer, aside, form, ' +
+    '[role="navigation"], [role="banner"], [role="complementary"], [role="contentinfo"], ' +
+    '.nav, .menu, .sidebar, .header, .footer, .advertisement, .ad, .promo, ' +
+    '.cookie-banner, .popup, .modal, button, input, select, ' +
+    '[class*="share"], [class*="social"], [class*="comment"], ' +
+    '[id*="cookie"], [class*="cookie"], [class*="newsletter"], ' +
+    '[class*="related"], [class*="recommend"], .breadcrumb, ' +
+    'iframe, video, audio'
+  );
+  elementsToRemove.forEach(el => el.remove());
+  
+  // Prefer article/main content if available
+  let contentElement = clone.querySelector('article, main, [role="main"], .content, .article, #content, #main, .post-content, .entry-content');
+  if (!contentElement) {
+    contentElement = clone;
+  }
   
   // Get visible text
-  const text = clone.innerText || clone.textContent;
+  let text = contentElement.innerText || contentElement.textContent;
+  
+  // Split into lines and clean
+  let lines = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => {
+      // Must be substantial (more than 30 chars)
+      if (line.length < 30) return false;
+      
+      // Filter out common UI patterns
+      const uiPatterns = [
+        /^(Posted|Attribution|Comments?|Share|Follow|Subscribe|Live\.?|Close|Open|Show|Hide|More|Less|Read more|Continue reading|Sign up|Log in|Register)/i,
+        /^\d+\s*(hour|minute|day|week|month|year)s?\s*ago/i,
+        /^(Updated|Published):/i,
+        /^\d+\s*Comments?$/i,
+        /^(Watch|Listen|Gallery|Video|Audio):/i,
+        /Change my nation|You are now seeing/i,
+        /United Kingdom|England|Scotland|Wales|Northern Ireland$/,
+        /^(Top Stories|Latest|Trending|Popular|Most Read)/i
+      ];
+      
+      return !uiPatterns.some(pattern => pattern.test(line));
+    });
+  
+  // Remove duplicate consecutive lines
+  lines = lines.filter((line, index) => {
+    if (index === 0) return true;
+    return line !== lines[index - 1];
+  });
+  
+  // Remove lines that appear more than twice (likely navigation)
+  const lineCounts = {};
+  lines.forEach(line => {
+    lineCounts[line] = (lineCounts[line] || 0) + 1;
+  });
+  lines = lines.filter(line => lineCounts[line] <= 2);
+  
+  text = lines.join('\n').replace(/\n{3,}/g, '\n\n');
   
   // Limit content length to avoid token limits
   const maxLength = 10000;

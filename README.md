@@ -32,7 +32,7 @@ A browser extension that analyzes and summarizes webpages using a local Python A
 
 3. **Download NLTK data**
    ```bash
-   python -c "import nltk; nltk.download('punkt')"
+   python -c "import nltk; nltk.download('punkt_tab')"
    ```
 
 4. **Start the Python server**
@@ -108,7 +108,7 @@ Local-Python-AI-web-extension/
 
 ### Import Errors
 - Run: `pip install -r requirements.txt`
-- Run: `python -c "import nltk; nltk.download('punkt')"`
+- Run: `python -c "import nltk; nltk.download('punkt_tab')"`
 
 ### "Could not extract page content"
 - Try refreshing the page
