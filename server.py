@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sumy.parsers.plaintext import PlaintextParser
 from sumy.nlp.tokenizers import Tokenizer
-from sumy.summarizers.text_rank import TextRankSummarizer
+from sumy.summarizers.lex_rank import LexRankSummarizer
+from sumy.summarizers.edmundson import EdmundsonSummarizer
 import re
 
 app = FastAPI()
@@ -24,86 +25,88 @@ def clean_text(text):
     # Remove email addresses
     text = re.sub(r'\S+@\S+', '', text)
     
-    # Split into sentences/lines
-    lines = text.split('\n')
+    # Remove image references and captions
+    text = re.sub(r'Image source,?\s*[^.!?]*?(?:Getty Images?|Reuters|AP|AFP|EPA)', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'Image caption,?\s*[^.!?]*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'Media caption,?\s*[^.!?]*', '', text, flags=re.IGNORECASE)
     
-    # Filter out short lines and UI elements
-    filtered_lines = []
-    for line in lines:
-        line = line.strip()
+    # Remove "By [Author]" and "Published X ago" patterns
+    text = re.sub(r'By\s*[A-Z][a-zA-Z\s,]+(?:Published|Report|Technology|correspondent|reporter)', '', text)
+    text = re.sub(r'Published\s*\d+\s*(hours?|minutes?|days?|weeks?|months?)\s*ago', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'Published\d+\s*[A-Z][a-z]+\s*\d{4},\s*\d{2}:\d{2}', '', text)  # Published4 February 2026, 06:03
+    text = re.sub(r'\d{1,2}\s+[A-Z][a-z]+\s+\d{4},\s+\d{2}:\d{2}\s+[A-Z]{3,4}', '', text)  # 4 February 2026, 06:03 GMT
+    
+    # Split into sentences more carefully
+    # First, protect abbreviations
+    text = re.sub(r'\bMr\.', 'Mr', text)
+    text = re.sub(r'\bMrs\.', 'Mrs', text)
+    text = re.sub(r'\bMs\.', 'Ms', text)
+    text = re.sub(r'\bDr\.', 'Dr', text)
+    text = re.sub(r'\bU\.S\.', 'US', text)
+    text = re.sub(r'\bU\.K\.', 'UK', text)
+    
+    # Split on actual sentence boundaries
+    sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
+    
+    # Also split on period followed immediately by capital letter (no space)
+    refined_sentences = []
+    for sent in sentences:
+        # Split sentences that are run together like "sentence1.Sentence2"
+        parts = re.split(r'\.(?=[A-Z])', sent)
+        for part in parts:
+            if part and not part.endswith('.'):
+                part += '.'
+            refined_sentences.append(part)
+    
+    sentences = refined_sentences
+    
+    # Filter out short sentences and UI elements
+    filtered_sentences = []
+    for sentence in sentences:
+        sentence = sentence.strip()
         
-        # Skip short lines
-        if len(line) < 40:
+        # Skip very short sentences
+        if len(sentence) < 30:
             continue
         
-        # Skip lines with common UI patterns
-        if re.search(r'^(Posted|Attribution|Comments?|Live\.|Watch:|Listen:|Gallery:|Video:)', line, re.IGNORECASE):
+        # Skip common UI patterns and metadata
+        if re.search(r'^(Posted|Attribution|Comments?|Live\.|Watch:|Listen:|Gallery:|Video:|Related topics?|More on this story|Media caption|Image caption|Image source|By[A-Z])', sentence, re.IGNORECASE):
             continue
         
-        # Skip lines that are mostly numbers/timestamps
-        if re.search(r'^\d+\s*(hour|minute|day|week|month)s?\s*ago', line, re.IGNORECASE):
+        # Skip timestamp patterns
+        if re.search(r'^\d+\s*(hour|minute|day|week|month)s?\s*ago', sentence, re.IGNORECASE):
+            continue
+        
+        # Skip sentences that contain "Media caption" or "Image caption" anywhere
+        if re.search(r'Media caption|Image caption', sentence, re.IGNORECASE):
+            continue
+        
+        # Skip lines that are mostly links/navigation
+        if sentence.count('Published') > 1:
             continue
             
-        filtered_lines.append(line)
+        filtered_sentences.append(sentence)
     
-    # Remove duplicate lines
+    # Remove duplicate sentences
     seen = set()
-    unique_lines = []
-    for line in filtered_lines:
-        line_lower = line.lower()
-        if line_lower not in seen:
-            seen.add(line_lower)
-            unique_lines.append(line)
+    unique_sentences = []
+    for sentence in filtered_sentences:
+        sentence_lower = sentence.lower()
+        if sentence_lower not in seen:
+            seen.add(sentence_lower)
+            unique_sentences.append(sentence)
     
-    # Join with proper sentence spacing
-    text = '. '.join(unique_lines)
+    # Join with proper spacing
+    text = ' '.join(unique_sentences)
     
-    # Fix double periods and ensure proper punctuation
+    # Clean up punctuation
     text = re.sub(r'\.\.+', '.', text)
-    text = re.sub(r'([.!?])\s*\.\s*', r'\1 ', text)
-    
-    # Ensure text ends with punctuation
-    if text and text[-1] not in '.!?':
-        text += '.'
+    text = re.sub(r'\s+([.!?,;:])', r'\1', text)
     
     # Remove excessive whitespace
     text = re.sub(r'\s+', ' ', text)
     
     return text.strip()
-
-def detect_title_lines(lines):
-    """Detect which lines are likely titles/headers vs descriptions"""
-    titles = []
-    descriptions = []
-    
-    for i, line in enumerate(lines):
-        line = line.strip()
-        if len(line) < 20:
-            continue
-            
-        # Characteristics of titles:
-        # - Shorter (< 80 chars)
-        # - Often capitalized words
-        # - No lowercase conjunctions at start
-        # - May contain location/date info
-        is_title = False
-        
-        # Check for location/date pattern (likely metadata, not title)
-        if re.search(r'(Washington|Portland|Sydney|Berlin|Zagreb|Copenhagen|Wellington|Düsseldorf|Philadelphia|Berkeley|London|Dublin),.*\d{4}', line):
-            is_title = False  # This is metadata, treat as description
-        # Short line with capitalized words = likely a title
-        elif len(line) < 80 and sum(1 for c in line if c.isupper()) >= 3:
-            is_title = True
-        # Title-like patterns
-        elif re.search(r'^[A-Z][^.]+[A-Z]', line) and len(line) < 100 and line.count(',') <= 1:
-            is_title = True
-        
-        if is_title:
-            titles.append((i, line))
-        else:
-            descriptions.append((i, line))
-    
-    return titles, descriptions
 
 @app.post("/summarize")
 async def summarize(data: dict):
@@ -119,94 +122,56 @@ async def summarize(data: dict):
         if len(cleaned_text) < 100:
             return {"summary": "Not enough content to summarize."}
         
-        # Check if this is already condensed content (list/index page)
-        lines = cleaned_text.split('. ')
-        word_count = len(cleaned_text.split())
-        
-        # Calculate average line/sentence length
-        avg_length = word_count / max(len(lines), 1)
-        
-        # If already condensed (likely a list of items), format with structure
-        if (avg_length < 25 and len(lines) >= 3 and len(lines) <= 20) or (word_count < 2000 and len(lines) >= 3):
-            # Detect potential titles
-            titles, descriptions = detect_title_lines(lines)
-            
-            # If we found titles, create structured output
-            if len(titles) >= 2:
-                formatted_sections = []
-                
-                for i, (idx, title) in enumerate(titles):
-                    # Get descriptions between this title and the next
-                    next_idx = titles[i + 1][0] if i + 1 < len(titles) else len(lines)
-                    section_lines = [lines[j].strip() for j in range(idx + 1, next_idx) 
-                                    if j < len(lines) and len(lines[j].strip()) > 30]
-                    
-                    if section_lines:
-                        formatted_sections.append(f"**{title}**\n\n" + "\n\n".join(section_lines))
-                
-                if formatted_sections:
-                    return {"summary": "\n\n---\n\n".join(formatted_sections)}
-            
-            # Fallback: format as bullet points
-            formatted_items = []
-            for line in lines:
-                line = line.strip()
-                if line and len(line) > 30:
-                    if not line.endswith('.'):
-                        line += '.'
-                    formatted_items.append(line)
-            
-            if formatted_items:
-                formatted = "**Key Points:**\n\n• " + "\n\n• ".join(formatted_items)
-                return {"summary": formatted}
-        
-        # For longer content, use TextRank summarization
+        # Parse the text
         parser = PlaintextParser.from_string(cleaned_text, Tokenizer("english"))
-        summarizer = TextRankSummarizer()
         
-        # Determine number of sentences based on content length
-        num_sentences = min(6, max(3, len(cleaned_text) // 500))
-        summary = summarizer(parser.document, num_sentences)
+        # Use LexRank for the 2-sentence summary
+        lexrank_summarizer = LexRankSummarizer()
+        summary_sentences = lexrank_summarizer(parser.document, 2)
         
-        summary_text = " ".join([str(s) for s in summary])
+        # Ensure we only get exactly 2 sentences
+        summary_list = list(summary_sentences)[:2]
+        summary_text = " ".join([str(s).strip() for s in summary_list])
+        
+        # If the summary is too long or contains multiple sentences run together, truncate
+        if len(summary_text) > 500:
+            # Split and take only first 2 actual sentences
+            sent_parts = re.split(r'(?<=[.!?])\s+', summary_text)
+            summary_text = " ".join(sent_parts[:2])
+        
+        # Use Edmundson for extracting main facts
+        edmundson_summarizer = EdmundsonSummarizer()
+        
+        # Edmundson uses bonus/stigma/null words for better fact extraction
+        # Set bonus words (important terms) and stigma words (less important)
+        edmundson_summarizer.bonus_words = ["important", "significant", "key", "major", "critical", "essential"]
+        edmundson_summarizer.stigma_words = ["maybe", "perhaps", "possibly", "might", "could"]
+        # Set null words (common stopwords to ignore)
+        edmundson_summarizer.null_words = ["the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", 
+                                          "of", "with", "by", "from", "up", "about", "into", "through", "during",
+                                          "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+                                          "do", "does", "did", "will", "would", "should", "could", "may", "might",
+                                          "can", "this", "that", "these", "those", "i", "you", "he", "she", "it",
+                                          "we", "they", "them", "their", "what", "which", "who", "when", "where",
+                                          "why", "how", "all", "each", "every", "both", "few", "more", "most",
+                                          "other", "some", "such", "no", "nor", "not", "only", "own", "same",
+                                          "so", "than", "too", "very", "s", "t", "just", "don", "now"]
+        
+        # Get additional sentences for main facts (3-5 sentences)
+        num_fact_sentences = min(5, max(3, len(cleaned_text) // 600))
+        fact_sentences = edmundson_summarizer(parser.document, num_fact_sentences)
         
         if not summary_text:
             return {"summary": "Unable to generate a meaningful summary from this content."}
         
-        return {"summary": summary_text}
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.post("/answer")
-async def answer_question(data: dict):
-    text = data.get("text", "")
-    question = data.get("question", "")
-    
-    if not text:
-        return {"error": "No text provided"}
-    
-    try:
-        # Clean the text first
-        cleaned_text = clean_text(text)
+        # Format the output with summary and main facts
+        output = f"**Summary:**\n\n{summary_text}\n\n"
         
-        if len(cleaned_text) < 100:
-            return {"answer": "Not enough content to analyze."}
+        if fact_sentences:
+            facts_text = "\n\n• ".join([str(s) for s in fact_sentences])
+            output += f"**Main Facts:**\n\n• {facts_text}"
         
-        parser = PlaintextParser.from_string(cleaned_text, Tokenizer("english"))
-        summarizer = TextRankSummarizer()
-        
-        # Get more sentences for Q&A context
-        num_sentences = min(7, max(5, len(cleaned_text) // 400))
-        summary = summarizer(parser.document, num_sentences)
-        
-        summary_text = " ".join([str(s) for s in summary])
-        
-        if not summary_text:
-            return {"answer": "Unable to extract relevant information from this content."}
-        
-        response = f"Based on the webpage content:\n\n{summary_text}\n\n(Note: This is an extractive summary. For more precise answers to specific questions, consider integrating a language model.)"
-        
-        return {"answer": response}
+        return {"summary": output}
     except Exception as e:
         return {"error": str(e)}
 
