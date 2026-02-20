@@ -1,22 +1,36 @@
 # Local AI Webpage Analyzer
 
-A browser extension that analyzes webpages and highlights the most important sentences directly on the page using a local Python AI server. No API keys required - everything runs on your machine!
+A browser extension that analyzes webpages using advanced NLP for text summarization and named entity recognition (NER). 
+
+**Features:**
+- Highlight important sentences directly on webpages
+- Automatically categorize and highlight named entities (people, organizations, locations, events, properties, vehicles)
+- No API keys required - everything runs locally on your machine
+
+All analysis happens on your machine using Python. No data is sent to external services.
 
 ## Features
 
 - **Local Processing**: All analysis happens on your machine using Python
-- **Privacy-Focused**: No data sent to external services
-- **Smart Highlighting**: Highlights key sentences directly on webpages using advanced NLP algorithms
-- **Dual AI Algorithms**: Combines LexRank and Edmundson summarizers for better accuracy
-- **Visual Analysis**: Instantly see the most important content on any webpage
-- **Clear Highlights**: Remove highlights with one click
+- **Privacy-Focused**: No data sent to external services  
+- **Smart Highlighting**: Highlights key sentences using LexRank and Edmundson algorithms
+- **Entity Categorization** ⭐ NEW: Automatically categorize and highlight entities:
+  - **Person** (Red #FF6B6B)
+  - **Organization** (Teal #4ECDC4)
+  - **Address/Location** (Yellow #FFE66D)
+  - **Event** (Mint #95E1D3)
+  - **Property** (Lavender #C7CEEA)
+  - **Vehicle** (Peach #FFDAC1)
+- **Automatic NER**: Uses NLTK's Named Entity Recognition for automatic entity detection - no manual word lists needed
+- **Visual Analysis**: Color-coded highlighting with legend
+- **Clear Highlights**: Remove all highlights with one click
 - **No API Keys**: No cloud services or API costs
 
 ## Installation
 
 ### Prerequisites
 - A modern web browser (Chrome, Edge, or any Chromium-based browser)
-- Python 3.8 or higher
+- Python 3.8 or higher (Python 3.14 tested and working)
 
 ### Steps
 
@@ -34,18 +48,19 @@ A browser extension that analyzes webpages and highlights the most important sen
    The extension uses:
    - FastAPI for the server
    - Sumy for text summarization (LexRank and Edmundson algorithms)
-   - NLTK for natural language processing
+   - NLTK for natural language processing and Named Entity Recognition
 
-3. **Download NLTK data** (required for text processing)
+3. **Download required NLTK data**
    ```bash
-   python -c "import nltk; nltk.download('punkt_tab')"
+   python -c "import nltk; nltk.download('punkt_tab'); nltk.download('averaged_perceptron_tagger'); nltk.download('maxent_ne_chunker'); nltk.download('words')"
    ```
+   These NLTK models provide tokenization and Named Entity Recognition capabilities required for entity categorization.
 
 4. **Start the Python server**
    ```bash
-   python server.py
+   python run_server.py
    ```
-   Keep this terminal window open while using the extension.
+   Keep this terminal window open while using the extension. The server will run at http://127.0.0.1:8000
 
 5. **Load the extension in your browser**
    - Open your browser and navigate to:
@@ -57,24 +72,62 @@ A browser extension that analyzes webpages and highlights the most important sen
 
 ## Usage
 
-1. **Make sure the Python server is running** (see installation step 4 above)
+### Highlighting Important Sentences
+
+1. Make sure the Python server is running
 2. Navigate to any webpage you want to analyze
 3. Click the extension icon in your browser toolbar
-4. Click **"Analyze & Highlight"** to identify and highlight the most important sentences
+4. Click **"Highlight Main Points"** to identify and highlight important sentences
 5. The extension will:
    - Extract and clean the page content
    - Analyze it using LexRank and Edmundson algorithms
-   - Highlight key sentences directly on the page with yellow highlighting
+   - Highlight key sentences in yellow
    - Show you a list of the highlighted sentences in the popup
-6. Click **"Clear Highlights"** to remove all highlights from the page
 
-### What Gets Highlighted
+### Categorizing Entities
 
+1. Make sure the Python server is running
+2. Navigate to any webpage with text content
+3. Click the extension icon in your browser toolbar
+4. Click **"Categorize Entities"** to extract and highlight entities by category
+5. The extension will:
+   - Extract page content
+   - Use spaCy NER to automatically identify and categorize entities
+   - Highlight each entity with color-coding based on its category
+   - Display a legend showing which color represents which category
+   - Show statistics on found entities
+
+6. Hover over highlighted entities to see their category
+7. Click **"Clear Highlights"** to remove all highlights from the page
+
+### Entity Categories & Colors
+
+- **Person** (Red #FF6B6B): Names of people and individuals
+- **Organization** (Teal #4ECDC4): Companies, institutions, and groups
+- **Address/Location** (Yellow #FFE66D): Geographic locations, cities, countries
+- **Event** (Mint #95E1D3): Events, holidays, conferences
+- **Property** (Lavender #C7CEEA): Facilities and property
+- **Vehicle** (Peach #FFDAC1): Vehicles and transportation
+
+## How It Works
+
+### Text Summarization
 The extension uses two complementary AI algorithms:
-- **LexRank**: Identifies the most representative sentences based on graph-based ranking
-- **Edmundson**: Extracts main facts using bonus/stigma/null word analysis
+- **LexRank**: Graph-based ranking to identify representative sentences
+- **Edmundson**: Extracts important facts using linguistic analysis
 
-This dual approach ensures both summary-quality sentences and fact-rich content are highlighted.
+### Entity Recognition & Categorization
+The extension uses **NLTK's Named Entity Recognition (NER)** to automatically identify and categorize entities without manual word lists. The system recognizes:
+- Named entities (PERSON, ORGANIZATION, LOCATION, etc.)
+- Geopolitical entities
+- Facilities and products
+- Events and dates
+
+This approach is:
+- **Automatic**: No need to maintain word lists or update categorization rules
+- **Accurate**: Trained on large corpora of English text
+- **Fast**: Processes text in milliseconds
+- **Contextual**: Understanding entity types based on linguistic features
 
 ## Privacy & Security
 

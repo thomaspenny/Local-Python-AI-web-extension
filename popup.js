@@ -21,9 +21,9 @@ async function checkServerStatus() {
   }
 }
 
-// Summarize button handler
-document.getElementById('summarizeBtn').addEventListener('click', async () => {
-  await highlightMainText();
+// Categorize button handler
+document.getElementById('categorizeBtn').addEventListener('click', async () => {
+  await highlightEntityCategories();
 });
 
 // Clear highlights button handler
@@ -60,7 +60,16 @@ function extractPageContent() {
     // Get visible text
     let text = contentElement.innerText || contentElement.textContent;
     
-    // If we got very little text, try without filtering
+    // If we got very little text, try from original document (not clone)
+    if (!text || text.trim().length < 100) {
+      // Try article from original
+      const article = document.querySelector('article, [role="main"], main');
+      if (article) {
+        text = article.innerText || article.textContent || '';
+      }
+    }
+    
+    // If still not enough, get from body
     if (!text || text.trim().length < 100) {
       text = document.body.innerText || document.body.textContent || '';
     }
@@ -138,64 +147,7 @@ function extractPageContent() {
   }
 }
 
-// Query Local Python Server
-async function queryLocalServer(endpoint, data) {
-  const apiUrl = `http://127.0.0.1:8000${endpoint}`;
-  
-  const response = await fetch(apiUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(data)
-  });
-  
-  if (!response.ok) {
-    throw new Error(`Server request failed: ${response.status}. Make sure the Python server is running.`);
-  }
-  
-  const result = await response.json();
-  
-  if (result.error) {
-    throw new Error(result.error);
-  }
-  
-  return result.summary || result.answer || 'No response from server';
-}
-
 // Convert markdown to HTML
-function markdownToHtml(markdown) {
-  let html = markdown;
-  
-  // Convert **bold** to <strong>
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  
-  // Convert bullet points to <ul><li>
-  // Handle multiple consecutive bullets as a list
-  html = html.replace(/^(\s*\*\s+.+)(\n\s*\*\s+.+)*/gm, (match) => {
-    const items = match.split('\n').map(line => {
-      const content = line.replace(/^\s*\*\s+/, '');
-      return content ? `<li>${content}</li>` : '';
-    }).filter(item => item).join('');
-    return `<ul>${items}</ul>`;
-  });
-  
-  // Convert line breaks to paragraphs (avoid double spacing after lists)
-  html = html.split('\n\n').map(para => {
-    para = para.trim();
-    if (!para) return '';
-    if (para.startsWith('<ul>') || para.startsWith('<li>')) return para;
-    return `<p>${para}</p>`;
-  }).join('');
-  
-  // Clean up any remaining single line breaks within paragraphs
-  html = html.replace(/<p>([^<]+)<\/p>/g, (match, content) => {
-    return `<p>${content.replace(/\n/g, '<br>')}</p>`;
-  });
-  
-  return html;
-}
-
 // Helper function to display response
 function showResponse(message, isLoading = false) {
   const responseBox = document.getElementById('response');
@@ -204,9 +156,7 @@ function showResponse(message, isLoading = false) {
     responseBox.textContent = message;
     responseBox.className = 'response-box loading';
   } else {
-    // Convert markdown to HTML for formatted output
-    const htmlContent = markdownToHtml(message);
-    responseBox.innerHTML = htmlContent;
+    responseBox.innerHTML = message;
     responseBox.className = 'response-box';
   }
 }
@@ -222,80 +172,117 @@ function showError(message) {
   responseBox.className = 'response-box';
 }
 
-// Highlight main text on the page
-async function highlightMainText() {
-  const btn = document.getElementById('summarizeBtn');
-  const clearBtn = document.getElementById('clearBtn');
-  
-  btn.disabled = true;
-  clearBtn.disabled = true;
-  showResponse('Analyzing page and identifying key sentences...', true);
-  
+// Categorize and highlight entities on the page
+async function highlightEntityCategories() {
   try {
-    console.log('[DEBUG] Starting highlight process...');
+    const btn = document.getElementById('categorizeBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    btn.disabled = true;
+    clearBtn.disabled = true;
+    
+    showResponse('Extracting page content...', true);
     
     // Get the active tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    console.log('[DEBUG] Active tab:', tab.url);
     
     // Extract page content
-    showResponse('Extracting page content...', true);
-    const results = await chrome.scripting.executeScript({
+    const extractResult = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       function: extractPageContent
     });
     
-    const pageContent = results[0].result;
-    console.log('[DEBUG] Page content length:', pageContent?.text?.length || 0);
-    
-    if (!pageContent || !pageContent.text) {
-      throw new Error('Could not extract page content');
+    if (!extractResult || !extractResult[0] || !extractResult[0].result) {
+      showError('Failed to extract page content');
+      btn.disabled = false;
+      clearBtn.disabled = false;
+      return;
     }
     
-    // Get key sentences from server
-    showResponse('Analyzing with AI (LexRank + Edmundson)...', true);
-    console.log('[DEBUG] Sending to server...');
-    const response = await queryLocalServer('/summarize', { text: pageContent.text });
-    console.log('[DEBUG] Server response:', response.substring(0, 200) + '...');
-    
-    // Parse the response to extract sentences
-    const sentences = extractSentencesFromResponse(response);
-    console.log('[DEBUG] Extracted sentences:', sentences.length);
-    sentences.forEach((s, i) => console.log(`[DEBUG] Sentence ${i+1}:`, s.substring(0, 80) + '...'));
-    
-    if (sentences.length === 0) {
-      throw new Error('No key sentences found');
+    const pageData = extractResult[0].result;
+    if (!pageData.text || pageData.text.length < 50) {
+      console.log('[DEBUG] Insufficient content:', pageData);
+      showError(pageData.error || 'Not enough content on page. Need at least 50 characters.');
+      btn.disabled = false;
+      clearBtn.disabled = false;
+      return;
     }
     
-    // Inject and execute highlighting directly
-    showResponse('Highlighting sentences on page...', true);
-    console.log('[DEBUG] Injecting highlight function...');
-    const [highlightResult] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: highlightTextOnPage,
-      args: [sentences]
+    console.log('[DEBUG] Extracted text length:', pageData.text.length);
+    console.log('[DEBUG] Extracted text preview:', pageData.text.substring(0, 200));
+    console.log('[DEBUG] Extracted text last 200:', pageData.text.substring(Math.max(0, pageData.text.length - 200)));
+    
+    showResponse('Categorizing entities...', true);
+    
+    // Send to server for categorization
+    const response = await fetch('http://127.0.0.1:8000/categorize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: pageData.text })
     });
     
-    const result = highlightResult.result;
-    console.log('[DEBUG] Highlight result:', result);
-    
-    if (result && result.success) {
-      // Format output with highlighted sentences
-      const highlightedSentences = result.highlightedSentences || sentences;
-      let output = `✓ Highlighted ${highlightedSentences.length} key sentence${highlightedSentences.length !== 1 ? 's' : ''}\n\n**Highlighted Sentences:**\n\n`;
-      highlightedSentences.forEach((sentence, i) => {
-        output += `${i + 1}. ${sentence}\n\n`;
-      });
-      showResponse(output);
-    } else {
-      showError(result?.message || 'Failed to highlight text');
+    if (!response.ok) {
+      throw new Error(`Server request failed: ${response.status}`);
     }
     
+    const categorizeResult = await response.json();
+    console.log('[DEBUG] Categorize response:', categorizeResult);
+    
+    if (categorizeResult.error) {
+      showError(`Server error: ${categorizeResult.error}`);
+      btn.disabled = false;
+      clearBtn.disabled = false;
+      return;
+    }
+    
+    if (!categorizeResult.entities || categorizeResult.entities.length === 0) {
+      console.log('[DEBUG] No entities found. Response:', categorizeResult);
+      console.log('[DEBUG] Server received text_length:', categorizeResult.text_length, 'sentences:', categorizeResult.sentences);
+      showResponse('No entities found on this page. Try a different page with more proper nouns (names, companies, locations).', false);
+      btn.disabled = false;
+      clearBtn.disabled = false;
+      return;
+    }
+    
+    showResponse(`Found ${categorizeResult.entities.length} entities. Highlighting...`, true);
+    
+    // Inject highlighting function into content
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: highlightEntitiesOnPage,
+      args: [categorizeResult.entities]
+    });
+    
+    // Display results
+    const categoryCount = {};
+    categorizeResult.entities.forEach(entity => {
+      categoryCount[entity.category] = (categoryCount[entity.category] || 0) + 1;
+    });
+
+    const categoryDisplayNames = {
+      'person': 'Person',
+      'organization': 'Organization',
+      'address/location': 'Address/Location',
+      'event': 'Event',
+      'property': 'Property',
+      'vehicle': 'Vehicle'
+    };
+    
+    let resultHTML = `<strong>Found ${categorizeResult.entities.length} entities:</strong><br><br>`;
+    Object.entries(categoryCount).sort().forEach(([category, count]) => {
+      const displayName = categoryDisplayNames[category] || category;
+      resultHTML += `<strong>${displayName}:</strong> ${count} entities<br>`;
+    });
+    
+    showResponse(resultHTML, false);
+    btn.disabled = false;
+    clearBtn.disabled = false;
   } catch (error) {
-    console.error('[ERROR] Full error:', error);
+    console.error('[ERROR] Categorization error:', error);
+    console.error('[ERROR] Full error:', error.message);
     console.error('[ERROR] Stack:', error.stack);
-    showError(`Error: ${error.message}\n\nCheck browser console (F12) for details.`);
-  } finally {
+    showError(`Error: ${error.message}`);
+    const btn = document.getElementById('categorizeBtn');
+    const clearBtn = document.getElementById('clearBtn');
     btn.disabled = false;
     clearBtn.disabled = false;
   }
@@ -319,8 +306,27 @@ async function clearHighlights() {
 }
 
 // Function to highlight text (runs in page context)
-function highlightTextOnPage(sentences) {
-  // Remove existing highlights
+// Function to highlight entities by category (runs in page context)
+function highlightEntitiesOnPage(entities) {
+  const categoryColors = {
+    'person': '#FF6B6B',
+    'organization': '#4ECDC4',
+    'address/location': '#FFE66D',
+    'event': '#95E1D3',
+    'property': '#C7CEEA',
+    'vehicle': '#FFDAC1'
+  };
+
+  const categoryDisplayNames = {
+    'person': 'Person',
+    'organization': 'Organization',
+    'address/location': 'Address/Location',
+    'event': 'Event',
+    'property': 'Property',
+    'vehicle': 'Vehicle'
+  };
+  
+  // Remove existing highlights first
   const existingHighlights = document.querySelectorAll('.ai-highlight');
   existingHighlights.forEach(el => {
     const parent = el.parentNode;
@@ -328,30 +334,90 @@ function highlightTextOnPage(sentences) {
     parent.normalize();
   });
   
-  // Add highlight styles
+  // Remove existing legend
+  const existingLegend = document.querySelector('.entity-legend');
+  if (existingLegend) {
+    existingLegend.remove();
+  }
+  
+  // Add styles for entity highlighting
   if (!document.getElementById('ai-highlight-styles')) {
     const style = document.createElement('style');
     style.id = 'ai-highlight-styles';
     style.textContent = `
       .ai-highlight {
-        background-color: #ffeb3b !important;
-        padding: 2px 0 !important;
+        padding: 2px 4px !important;
+        border-radius: 3px !important;
+        transition: all 0.2s ease !important;
+        font-weight: 500 !important;
+        cursor: pointer !important;
+      }
+      .ai-highlight:hover {
+        opacity: 0.85 !important;
+        box-shadow: 0 0 4px rgba(0,0,0,0.2) !important;
+      }
+      .ai-highlight[data-category="person"] {
+        background-color: #FF6B6B !important;
+        color: white !important;
+      }
+      .ai-highlight[data-category="organization"] {
+        background-color: #4ECDC4 !important;
+        color: white !important;
+      }
+      .ai-highlight[data-category="address/location"] {
+        background-color: #FFE66D !important;
+        color: black !important;
+      }
+      .ai-highlight[data-category="event"] {
+        background-color: #95E1D3 !important;
+        color: black !important;
+      }
+      .ai-highlight[data-category="property"] {
+        background-color: #C7CEEA !important;
+        color: black !important;
+      }
+      .ai-highlight[data-category="vehicle"] {
+        background-color: #FFDAC1 !important;
+        color: black !important;
+      }
+      .entity-legend {
+        position: fixed !important;
+        bottom: 20px !important;
+        right: 20px !important;
+        background: white !important;
+        border: 2px solid #333 !important;
+        border-radius: 8px !important;
+        padding: 12px !important;
+        font-size: 12px !important;
+        z-index: 10000 !important;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1) !important;
+      }
+      .entity-legend-item {
+        display: flex !important;
+        align-items: center !important;
+        margin-bottom: 6px !important;
+      }
+      .entity-legend-color {
+        width: 12px !important;
+        height: 12px !important;
         border-radius: 2px !important;
-        box-shadow: 0 0 0 2px rgba(255, 235, 59, 0.3) !important;
+        margin-right: 6px !important;
       }
     `;
     document.head.appendChild(style);
   }
   
   let highlightCount = 0;
-  const highlightedSentences = [];
   
-  sentences.forEach(sentence => {
-    const cleanSentence = sentence.trim();
-    if (cleanSentence.length < 20) return;
+  // Sort entities by length (longest first) to avoid overlapping highlights
+  const sortedEntities = [...entities].sort((a, b) => b.text.length - a.text.length);
+  
+  // Highlight each entity
+  sortedEntities.forEach(entity => {
+    const entityText = entity.text.trim();
+    const category = entity.category;
     
-    let sentenceHighlighted = false;
-    
+    // Find all text nodes in the document
     const walker = document.createTreeWalker(
       document.body,
       NodeFilter.SHOW_TEXT,
@@ -361,15 +427,11 @@ function highlightTextOnPage(sentences) {
           if (!parent) return NodeFilter.FILTER_REJECT;
           
           const tagName = parent.tagName.toLowerCase();
-          if (['script', 'style', 'noscript', 'iframe', 'figcaption'].includes(tagName)) {
+          if (['script', 'style', 'noscript', 'iframe'].includes(tagName)) {
             return NodeFilter.FILTER_REJECT;
           }
           
-          if (parent.classList.contains('ai-highlight')) return NodeFilter.FILTER_REJECT;
-          
-          const className = parent.className.toLowerCase();
-          if (className.includes('caption') || className.includes('credit') || 
-              className.includes('photo') || className.includes('image')) {
+          if (parent.classList.contains('ai-highlight') || parent.classList.contains('entity-legend')) {
             return NodeFilter.FILTER_REJECT;
           }
           
@@ -384,61 +446,34 @@ function highlightTextOnPage(sentences) {
       textNodes.push(node);
     }
     
+    // Search for the entity in text nodes (case insensitive)
     textNodes.forEach(textNode => {
       const text = textNode.textContent;
       const textLower = text.toLowerCase();
-      const cleanSentenceLower = cleanSentence.toLowerCase();
+      const entityLower = entityText.toLowerCase();
       
-      // Try exact match
-      if (textLower.includes(cleanSentenceLower)) {
-        const matchIndex = textLower.indexOf(cleanSentenceLower);
-        const beforeNode = document.createTextNode(text.substring(0, matchIndex));
-        const highlightedText = text.substring(matchIndex, matchIndex + cleanSentence.length);
-        const afterNode = document.createTextNode(text.substring(matchIndex + cleanSentence.length));
+      let searchIndex = 0;
+      let matchIndex;
+      
+      while ((matchIndex = textLower.indexOf(entityLower, searchIndex)) !== -1) {
+        // Check if this is a word boundary (not part of a larger word)
+        const charBefore = matchIndex > 0 ? text[matchIndex - 1] : ' ';
+        const charAfter = matchIndex + entityText.length < text.length ? text[matchIndex + entityText.length] : ' ';
         
-        const highlight = document.createElement('mark');
-        highlight.className = 'ai-highlight';
-        highlight.textContent = highlightedText;
+        // Check if surrounded by word boundaries
+        const isWordBoundary = /[\s\-.,;:\()\[\]!?]|^|$/.test(charBefore) && /[\s\-.,;:\()\[\]!?]|^|$/.test(charAfter);
         
-        const parent = textNode.parentNode;
-        parent.insertBefore(beforeNode, textNode);
-        parent.insertBefore(highlight, textNode);
-        parent.insertBefore(afterNode, textNode);
-        parent.removeChild(textNode);
-        
-        highlightCount++;
-        sentenceHighlighted = true;
-        if (highlightCount === 1) {
-          highlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      } else if (cleanSentence.length > 50) {
-        // Try key phrase match
-        const keyPhrase = cleanSentence.substring(0, 60).toLowerCase();
-        const keyPhraseIndex = textLower.indexOf(keyPhrase);
-        
-        if (keyPhraseIndex !== -1) {
-          const beforeText = text.substring(0, keyPhraseIndex);
-          const sentenceStart = Math.max(
-            beforeText.lastIndexOf('. ') + 2,
-            beforeText.lastIndexOf('! ') + 2,
-            beforeText.lastIndexOf('? ') + 2,
-            0
-          );
+        if (isWordBoundary) {
+          // Create highlight
+          const beforeNode = document.createTextNode(text.substring(0, matchIndex));
+          const highlightedText = text.substring(matchIndex, matchIndex + entityText.length);
+          const afterNode = document.createTextNode(text.substring(matchIndex + entityText.length));
           
-          const afterStart = keyPhraseIndex + 60;
-          const afterText = text.substring(afterStart);
-          const sentenceEndMatch = afterText.match(/[.!?]/);
-          const sentenceEnd = sentenceEndMatch 
-            ? afterStart + afterText.indexOf(sentenceEndMatch[0]) + 1
-            : Math.min(afterStart + 200, text.length);
-          
-          const beforeNode = document.createTextNode(text.substring(0, sentenceStart));
-          const highlightedText = text.substring(sentenceStart, sentenceEnd);
-          const afterNode = document.createTextNode(text.substring(sentenceEnd));
-          
-          const highlight = document.createElement('mark');
+          const highlight = document.createElement('span');
           highlight.className = 'ai-highlight';
+          highlight.setAttribute('data-category', category);
           highlight.textContent = highlightedText;
+          highlight.title = `${category}: ${entityText}`;
           
           const parent = textNode.parentNode;
           parent.insertBefore(beforeNode, textNode);
@@ -447,27 +482,31 @@ function highlightTextOnPage(sentences) {
           parent.removeChild(textNode);
           
           highlightCount++;
-          sentenceHighlighted = true;
-          if (highlightCount === 1) {
-            highlight.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
+          searchIndex = matchIndex + entityText.length;
+          
+          // Return early to avoid modifying the same node again
+          return;
+        } else {
+          searchIndex = matchIndex + 1;
         }
       }
     });
-    
-    if (sentenceHighlighted) {
-      highlightedSentences.push(cleanSentence);
-    }
   });
   
-  return { 
-    success: true, 
-    count: highlightCount,
-    highlightedSentences: highlightedSentences,
-    message: highlightCount > 0 
-      ? `Highlighted ${highlightCount} key sentence${highlightCount !== 1 ? 's' : ''}`
-      : 'Could not find matching text to highlight'
-  };
+  // Add legend
+  const legend = document.createElement('div');
+  legend.className = 'entity-legend';
+  let legendHTML = '<strong>Entity Categories:</strong><br>';
+  
+  Object.entries(categoryColors).forEach(([category, color]) => {
+    const displayName = categoryDisplayNames[category] || category;
+    legendHTML += `<div class="entity-legend-item"><div class="entity-legend-color" style="background-color: ${color}"></div>${displayName}</div>`;
+  });
+  
+  legend.innerHTML = legendHTML;
+  document.body.appendChild(legend);
+  
+  return highlightCount;
 }
 
 // Function to remove highlights (runs in page context)
@@ -483,26 +522,4 @@ function removeHighlightsFromPage() {
   if (styleEl) {
     styleEl.remove();
   }
-}
-
-// Extract individual sentences from the server response
-function extractSentencesFromResponse(response) {
-  const sentences = [];
-  
-  // Remove markdown formatting
-  let text = response.replace(/\*\*[^*]+\*\*:?/g, ''); // Remove **bold** headers
-  text = text.replace(/^•\s*/gm, ''); // Remove bullet points
-  text = text.replace(/^-\s*/gm, ''); // Remove dashes
-  
-  // Split by sentence boundaries
-  const parts = text.split(/[.!?]\s+/);
-  
-  parts.forEach(part => {
-    const cleaned = part.trim();
-    if (cleaned.length > 30) { // Only keep substantial sentences
-      sentences.push(cleaned);
-    }
-  });
-  
-  return sentences;
 }
